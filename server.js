@@ -14,7 +14,7 @@ const io = new Server(server, {
 });
 
 // 1. เชื่อมต่อ MongoDB (ใช้ลิงก์เดิมของคุณ)
-const MONGO_URI = process.env.MONGO_URI || "ใส่ลิงก์ MongoDB ของคุณตรงนี้"; 
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 mongoose.connect(MONGO_URI)
   .then(() => console.log("🟢 เชื่อมต่อ MongoDB สําเร็จ!"))
   .catch(err => console.log("❌ เชื่อมต่อ MongoDB ไม่สำเร็จ:", err));
