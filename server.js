@@ -49,7 +49,7 @@ app.get("/api/bills", async (req, res) => {
   }
 });
 
-// แก้ไขบิล (แก้โต๊ะ/ลบเมนู/เพิ่มเมนู)
+// แก้ไขบิล
 app.put("/api/bills/:id", async (req, res) => {
   try {
     const { table, items } = req.body;
@@ -78,10 +78,30 @@ app.delete("/api/bills/:id", async (req, res) => {
   }
 });
 
+// 📋 จัดการคิวออเดอร์ครัวแบบเรียลไทม์ (ซิงค์ทุกเครื่อง)
+let kitchenOrders = [];
+
+app.get("/api/kitchen-orders", (req, res) => {
+  res.json(kitchenOrders);
+});
+
+app.delete("/api/kitchen-orders/:id", (req, res) => {
+  kitchenOrders = kitchenOrders.filter(o => o.id != req.params.id);
+  res.json({ success: true });
+});
+
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
+
   socket.on("send_to_kitchen", (data) => {
-    io.emit("receive_order", data);
+    const orderWithTime = { ...data, receivedAt: Date.now() };
+    kitchenOrders.push(orderWithTime);
+    io.emit("receive_order", orderWithTime);
+  });
+
+  socket.on("finish_order", (id) => {
+    kitchenOrders = kitchenOrders.filter(o => o.id != id);
+    io.emit("order_removed", id);
   });
 });
 
