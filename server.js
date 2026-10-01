@@ -13,24 +13,22 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-// 1. เชื่อมต่อ MongoDB (ใช้ลิงก์เดิมของคุณ)
-const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI; 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log("🟢 เชื่อมต่อ MongoDB สําเร็จ!"))
+  .then(() => console.log("🟢 เชื่อมต่อ MongoDB สำเร็จ!"))
   .catch(err => console.log("❌ เชื่อมต่อ MongoDB ไม่สำเร็จ:", err));
 
-// 2. สร้างโครงสร้างข้อมูลบิล (Schema) พร้อมบันทึกเวลา
 const billSchema = new mongoose.Schema({
   table: String,
   items: Array,
   momTotal: Number,
   auntTotal: Number,
   grandTotal: Number,
-  createdAt: { type: Date, default: Date.now } // บันทึกเวลาแบบเรียลไทม์อัตโนมัติ
+  createdAt: { type: Date, default: Date.now }
 });
 const Bill = mongoose.model("Bill", billSchema);
 
-// API: บันทึกบิลเมื่อกดคิดเงิน
+// บันทึกบิล
 app.post("/api/bills", async (req, res) => {
   try {
     const newBill = new Bill(req.body);
@@ -41,17 +39,36 @@ app.post("/api/bills", async (req, res) => {
   }
 });
 
-// API: ดึงประวัติบิลทั้งหมดมาดูย้อนหลัง
+// ดึงประวัติบิล
 app.get("/api/bills", async (req, res) => {
   try {
-    const bills = await Bill.find().sort({ createdAt: -1 }); // เรียงจากล่าสุดไปเก่าสุด
+    const bills = await Bill.find().sort({ createdAt: -1 });
     res.json(bills);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// API: ลบบิลย้อนหลัง (กรณีคิดเงินผิด)
+// แก้ไขบิล (แก้โต๊ะ/ลบเมนู/เพิ่มเมนู)
+app.put("/api/bills/:id", async (req, res) => {
+  try {
+    const { table, items } = req.body;
+    const momTotal = items.filter((i) => i.owner === "mom").reduce((sum, i) => sum + Number(i.price), 0);
+    const auntTotal = items.filter((i) => i.owner === "aunt").reduce((sum, i) => sum + Number(i.price), 0);
+    const grandTotal = momTotal + auntTotal;
+
+    const updatedBill = await Bill.findByIdAndUpdate(
+      req.params.id,
+      { table, items, momTotal, auntTotal, grandTotal },
+      { new: true }
+    );
+    res.json({ success: true, message: "แก้ไขบิลสำเร็จ", data: updatedBill });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ลบบิล
 app.delete("/api/bills/:id", async (req, res) => {
   try {
     await Bill.findByIdAndDelete(req.params.id);
@@ -61,7 +78,6 @@ app.delete("/api/bills/:id", async (req, res) => {
   }
 });
 
-// Socket.io สำหรับส่งออเดอร์ให้พ่อ
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
   socket.on("send_to_kitchen", (data) => {
