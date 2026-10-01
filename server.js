@@ -18,7 +18,6 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log("🟢 เชื่อมต่อ MongoDB สำเร็จ!"))
   .catch(err => console.log("❌ เชื่อมต่อ MongoDB ไม่สำเร็จ:", err));
 
-// 1. Schema สำหรับบิลขาย (ของแม่)
 const billSchema = new mongoose.Schema({
   table: String,
   items: Array,
@@ -29,7 +28,6 @@ const billSchema = new mongoose.Schema({
 });
 const Bill = mongoose.model("Bill", billSchema);
 
-// 2. Schema สำหรับออเดอร์ครัวที่กำลังค้างทำอยู่ (ของพ่อ - เซฟลง DB กันหาย)
 const kitchenOrderSchema = new mongoose.Schema({
   id: { type: String, unique: true },
   table: String,
@@ -38,7 +36,6 @@ const kitchenOrderSchema = new mongoose.Schema({
 });
 const KitchenOrder = mongoose.model("KitchenOrder", kitchenOrderSchema);
 
-// 3. Schema สำหรับประวัติออเดอร์ที่ทำเสร็จแล้ววันนี้
 const kitchenHistorySchema = new mongoose.Schema({
   id: String,
   table: String,
@@ -48,10 +45,34 @@ const kitchenHistorySchema = new mongoose.Schema({
 });
 const KitchenHistory = mongoose.model("KitchenHistory", kitchenHistorySchema);
 
-// --- API BILLS (จัดการบิลขาย) ---
+// ฟังก์ชันคำนวณยอดเงิน (รองรับเคสลาบปลาดุก ป้า 40 / แม่ 20)
+const calculateTotals = (items) => {
+  let momTotal = 0;
+  let auntTotal = 0;
+
+  items.forEach(item => {
+    const qty = Number(item.quantity) || 1;
+    const itemTotal = Number(item.price) * qty;
+
+    if (item.name === "ลาบปลาดุก") {
+      auntTotal += 40 * qty;
+      momTotal += 20 * qty;
+    } else if (item.kitchen === "aunt") {
+      auntTotal += itemTotal;
+    } else {
+      momTotal += itemTotal;
+    }
+  });
+
+  return { momTotal, auntTotal, grandTotal: momTotal + auntTotal };
+};
+
 app.post("/api/bills", async (req, res) => {
   try {
-    const newBill = new Bill(req.body);
+    const { table, items, createdAt } = req.body;
+    const { momTotal, auntTotal, grandTotal } = calculateTotals(items);
+
+    const newBill = new Bill({ table, items, momTotal, auntTotal, grandTotal, createdAt });
     await newBill.save();
     res.status(201).json({ success: true, message: "บันทึกบิลสำเร็จ" });
   } catch (err) {
@@ -71,9 +92,7 @@ app.get("/api/bills", async (req, res) => {
 app.put("/api/bills/:id", async (req, res) => {
   try {
     const { table, items } = req.body;
-    const momTotal = items.filter((i) => i.owner === "mom").reduce((sum, i) => sum + Number(i.price), 0);
-    const auntTotal = items.filter((i) => i.owner === "aunt").reduce((sum, i) => sum + Number(i.price), 0);
-    const grandTotal = momTotal + auntTotal;
+    const { momTotal, auntTotal, grandTotal } = calculateTotals(items);
 
     const updatedBill = await Bill.findByIdAndUpdate(
       req.params.id,
@@ -95,8 +114,6 @@ app.delete("/api/bills/:id", async (req, res) => {
   }
 });
 
-
-// --- API KITCHEN (จัดการคิวออเดอร์ครัว ดึงจาก MongoDB 100%) ---
 app.get("/api/kitchen-orders", async (req, res) => {
   try {
     const orders = await KitchenOrder.find().sort({ receivedAt: 1 });
@@ -124,11 +141,7 @@ app.delete("/api/kitchen-history", async (req, res) => {
   }
 });
 
-// --- SOCKET.IO REALTIME ---
 io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
-
-  // แม่กดส่งออเดอร์
   socket.on("send_to_kitchen", async (data) => {
     try {
       const orderWithTime = { 
@@ -137,67 +150,58 @@ io.on("connection", (socket) => {
         items: data.items, 
         receivedAt: Date.now() 
       };
-
-      // บันทึกลง MongoDB ทันที
       await KitchenOrder.create(orderWithTime);
       io.emit("receive_order", orderWithTime);
     } catch (e) {
-      console.error("Save kitchen order error:", e);
+      console.error(e);
     }
   });
 
-  // พ่อกด "ทำเสร็จแล้ว" (ย้ายจากคิว ไปลงประวัติ)
   socket.on("finish_order", async (id) => {
     try {
       const order = await KitchenOrder.findOneAndDelete({ id: String(id) });
       if (order) {
-        const historyItem = {
+        await KitchenHistory.create({
           id: order.id,
           table: order.table,
           items: order.items,
           receivedAt: order.receivedAt,
           completedAt: Date.now()
-        };
-        await KitchenHistory.create(historyItem);
+        });
       }
-
       const active = await KitchenOrder.find().sort({ receivedAt: 1 });
       const history = await KitchenHistory.find().sort({ completedAt: -1 });
       io.emit("state_updated", { active, history });
     } catch (e) {
-      console.error("Finish order error:", e);
+      console.error(e);
     }
   });
 
-  // พ่อกด "กู้คืนคิว" (ย้ายจากประวัติ กลับมาทำใหม่)
   socket.on("revert_order", async (id) => {
     try {
       const historyOrder = await KitchenHistory.findOneAndDelete({ id: String(id) });
       if (historyOrder) {
-        const activeItem = {
+        await KitchenOrder.create({
           id: historyOrder.id,
           table: historyOrder.table,
           items: historyOrder.items,
           receivedAt: historyOrder.receivedAt
-        };
-        await KitchenOrder.create(activeItem);
+        });
       }
-
       const active = await KitchenOrder.find().sort({ receivedAt: 1 });
       const history = await KitchenHistory.find().sort({ completedAt: -1 });
       io.emit("state_updated", { active, history });
     } catch (e) {
-      console.error("Revert order error:", e);
+      console.error(e);
     }
   });
 
-  // พ่อกดรีเซ็ตประวัติทั้งหมด
   socket.on("clear_history", async () => {
     try {
       await KitchenHistory.deleteMany({});
       io.emit("history_cleared");
     } catch (e) {
-      console.error("Clear history error:", e);
+      console.error(e);
     }
   });
 });
